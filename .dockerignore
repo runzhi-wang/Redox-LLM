@@ -2,6 +2,8 @@
 .env.*
 !.env.example
 chroma_db/
+chroma_db_corrupt_*/
+data/
 output/
 .git/
 .github/
