@@ -21,8 +21,8 @@ services:
       OER_RAG_CHROMA_DIR: /data/chroma_db
     volumes:
       - ${MD_DATA_DIR:-./data/md}:/data/md:ro
-      - chroma_data:/data/chroma_db
-      - chat_output:/app/oer_rag/output
+      - ${CHROMA_DATA_DIR:-./data/chroma_db}:/data/chroma_db
+      - ${CHAT_OUTPUT_DIR:-./data/output}:/app/oer_rag/output
     ports:
       - "${STREAMLIT_PORT:-8501}:8501"
     healthcheck:
@@ -53,6 +53,3 @@ services:
       # Optional basic auth (create with: htpasswd -c deploy/nginx/.htpasswd team)
       # - ./deploy/nginx/.htpasswd:/etc/nginx/.htpasswd:ro
 
-volumes:
-  chroma_data:
-  chat_output:
