@@ -910,9 +910,18 @@ def _render_history() -> None:
                 st.caption("评论：暂无（可在对话页直接评价）")
 
 
-def _enqueue(text: str) -> None:
+def _enqueue(text: str | None = None) -> None:
+    # Button on_click passes args=(text,); chat_input on_submit passes nothing —
+    # value lives in session_state under the widget key.
+    if text is None:
+        text = st.session_state.get("main_chat_input") or ""
+    text = str(text).strip()
+    if not text:
+        return
     st.session_state.messages.append({"role": "user", "content": text})
-    st.session_state.processing_query = text.strip()
+    st.session_state.processing_query = text
+    if "main_chat_input" in st.session_state:
+        st.session_state.main_chat_input = ""
 
 
 def _answer(text: str, top_k: int) -> None:
