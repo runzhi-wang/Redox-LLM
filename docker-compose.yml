@@ -1,0 +1,58 @@
+# OER RAG — production stack (Streamlit + optional nginx)
+#
+# Before first run:
+#   1. cp .env.example .env && edit secrets
+#   2. Put markdown corpus on server (see README) and set MD_DATA_DIR
+#   3. Either copy existing chroma_db or run: ./deploy/scripts/rebuild-index.sh
+#
+# Usage:
+#   docker compose up -d --build          # app only
+#   docker compose --profile proxy up -d  # app + nginx reverse proxy
+
+services:
+  oer-rag:
+    build: .
+    container_name: oer-rag
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      EMBED_BACKEND: cloud
+      OER_RAG_MD_DIR: /data/md
+      OER_RAG_CHROMA_DIR: /data/chroma_db
+    volumes:
+      - ${MD_DATA_DIR:-./data/md}:/data/md:ro
+      - chroma_data:/data/chroma_db
+      - chat_output:/app/oer_rag/output
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nginx:
+    profiles: [proxy]
+    image: nginx:1.27-alpine
+    container_name: oer-rag-nginx
+    restart: unless-stopped
+    depends_on:
+      oer-rag:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/oer-rag.conf:/etc/nginx/conf.d/default.conf:ro
+      # Optional basic auth (create with: htpasswd -c deploy/nginx/.htpasswd team)
+      # - ./deploy/nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+
+volumes:
+  chroma_data:
+  chat_output:
