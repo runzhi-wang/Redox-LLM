@@ -17,10 +17,12 @@ services:
     env_file: .env
     environment:
       EMBED_BACKEND: cloud
-      OER_RAG_MD_DIR: /data/md
+      OER_RAG_OER_MD_DIR: /data/md
+      OER_RAG_EO_MD_DIR: /data/eo_md
       OER_RAG_CHROMA_DIR: /data/chroma_db
     volumes:
       - ${MD_DATA_DIR:-./data/md}:/data/md:ro
+      - ${EO_DATA_DIR:-./data/eo_md}:/data/eo_md:ro
       - ${CHROMA_DATA_DIR:-./data/chroma_db}:/data/chroma_db
       - ${CHAT_OUTPUT_DIR:-./data/output}:/app/oer_rag/output
     ports:

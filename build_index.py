@@ -87,7 +87,7 @@ def _wipe_collection(chroma) -> None:
     )
 
 
-def _repair_chroma_db() -> tuple[chromadb.PersistentClient, object]:
+def _repair_chroma_db_for(collection_name: str) -> tuple[chromadb.PersistentClient, object]:
     if CHROMA_DIR.exists():
         backup = CHROMA_DIR.with_name(
             f"{CHROMA_DIR.name}_corrupt_{int(time.time())}"
@@ -105,7 +105,7 @@ def _repair_chroma_db() -> tuple[chromadb.PersistentClient, object]:
                 ) from exc
     chroma = create_chroma_client()
     collection = chroma.create_collection(
-        name=COLLECTION_NAME,
+        name=collection_name,
         metadata=HNSW_CREATE_METADATA,
     )
     return chroma, collection
@@ -304,7 +304,13 @@ def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    parser = argparse.ArgumentParser(description="Build OER literature Chroma index")
+    parser = argparse.ArgumentParser(description="Build literature Chroma index")
+    parser.add_argument(
+        "--corpus",
+        choices=["oer", "eo"],
+        default="oer",
+        help="Which corpus to index (default: oer)",
+    )
     parser.add_argument(
         "--rebuild-all",
         action="store_true",
@@ -319,17 +325,27 @@ def main() -> int:
     args = parser.parse_args()
     rebuild_all = args.rebuild_all
 
+    from corpora import CORPORA, corpus_progress_path
+
+    corpus = CORPORA[args.corpus]
+    md_dir = corpus.md_dir
+    collection_name = corpus.collection_name
+    import index_utils as _iu
+
+    _iu.PROGRESS_PATH = corpus_progress_path(corpus)
+
     signal.signal(signal.SIGINT, _request_stop)
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _request_stop)
 
-    md_files = sorted(MD_DIR.glob("*.md"))
+    md_files = sorted(md_dir.glob("*.md"))
     if not md_files:
-        print(f"No .md files found in {MD_DIR}")
+        print(f"No .md files found in {md_dir}")
         return 1
 
     file_workers = max(1, INDEX_FILE_PARALLEL if is_cloud_embed() else 1)
 
+    print(f"Corpus: {corpus.label} ({collection_name})")
     print(f"Index version: {INDEX_VERSION}")
     print(f"Embedding backend: {EMBED_BACKEND} ({embed_model_name()})")
     if is_cloud_embed():
@@ -346,7 +362,11 @@ def main() -> int:
     chroma = create_chroma_client()
 
     if rebuild_all:
-        _wipe_collection(chroma)
+        try:
+            chroma.delete_collection(collection_name)
+        except (NotFoundError, ValueError):
+            pass
+        chroma.create_collection(name=collection_name, metadata=HNSW_CREATE_METADATA)
         progress = {"index_version": INDEX_VERSION, "files": {}, "stats": {}}
         save_progress(progress)
     else:
@@ -357,7 +377,7 @@ def main() -> int:
                 f"{INDEX_VERSION}; outdated files will be reindexed."
             )
 
-    collection = open_collection(chroma)
+    collection = open_collection(chroma, name=collection_name)
     if not probe_collection(collection):
         if repair_hnsw_segments():
             try:
@@ -365,14 +385,14 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 pass
             chroma = create_chroma_client()
-            collection = open_collection(chroma)
+            collection = open_collection(chroma, name=collection_name)
         if not probe_collection(collection):
             print(
                 "[WARN] Chroma index corrupted (hnsw load failed). "
                 "Rebuilding empty chroma_db; all papers will be reindexed.",
                 file=sys.stderr,
             )
-            chroma, collection = _repair_chroma_db()
+            chroma, collection = _repair_chroma_db_for(collection_name)
             if not rebuild_all:
                 _reset_progress_after_chroma_repair(progress)
 
@@ -464,13 +484,14 @@ def main() -> int:
         "chunk_target_tokens": CHUNK_TARGET_TOKENS,
         "chunk_max_tokens": CHUNK_MAX_TOKENS,
         "chunk_overlap_tokens": CHUNK_OVERLAP_TOKENS,
-        "md_dir": str(MD_DIR),
+        "corpus": corpus.key,
+        "md_dir": str(md_dir),
         "files_total": len(md_files),
         "files_done": done_files,
         "files_skipped": skipped,
         "files_failed": len(failed),
         "chunks_indexed_this_run": total_chunks,
-        "collection": COLLECTION_NAME,
+        "collection": collection_name,
         "chroma_dir": str(CHROMA_DIR),
         "embed_model": embed_model_name(),
         "embed_backend": EMBED_BACKEND,

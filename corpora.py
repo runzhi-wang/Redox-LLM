@@ -65,15 +65,18 @@ def corpus_progress_path(corpus: Corpus) -> Path:
 
 def count_indexed_papers(corpus: Corpus) -> int:
     path = corpus_progress_path(corpus)
-    if not path.exists():
-        return 0
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        files = data.get("files") or {}
-        done = sum(1 for item in files.values() if item.get("status") == "done")
-        return done
-    except (json.JSONDecodeError, OSError):
-        return 0
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            files = data.get("files") or {}
+            done = sum(1 for item in files.values() if item.get("status") == "done")
+            if done:
+                return done
+        except (json.JSONDecodeError, OSError):
+            pass
+    if corpus.md_dir.is_dir():
+        return len(list(corpus.md_dir.glob("*.md")))
+    return 0
 
 
 def corpora_for_mode(mode: str) -> list[Corpus]:
