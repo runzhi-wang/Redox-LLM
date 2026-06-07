@@ -877,13 +877,23 @@ def _render_header(status: dict) -> None:
 
 
 def _render_empty(status: dict) -> None:
-    papers = int(status.get("papers") or 0)
-    chunks = int(status.get("chunks") or 0)
-    st.markdown(hero_html(papers=papers, chunks=chunks), unsafe_allow_html=True)
+    oer = status.get("oer") or {}
+    eo = status.get("eo") or {}
+    st.markdown(
+        hero_html(
+            oer_papers=int(oer.get("papers") or 0),
+            oer_chunks=int(oer.get("chunks") or 0),
+            eo_papers=int(eo.get("papers") or 0),
+            eo_chunks=int(eo.get("chunks") or 0),
+        ),
+        unsafe_allow_html=True,
+    )
     st.markdown(
         stats_badges_html(
-            papers=papers,
-            chunks=chunks,
+            oer_papers=int(oer.get("papers") or 0),
+            oer_chunks=int(oer.get("chunks") or 0),
+            eo_papers=int(eo.get("papers") or 0),
+            eo_chunks=int(eo.get("chunks") or 0),
             model=st.session_state.chat_model,
         ),
         unsafe_allow_html=True,
@@ -891,7 +901,8 @@ def _render_empty(status: dict) -> None:
     st.markdown(feature_cards_html(), unsafe_allow_html=True)
     st.markdown('<p class="example-section-title">试试这些示例问题</p>', unsafe_allow_html=True)
     st.markdown('<div class="example-list">', unsafe_allow_html=True)
-    for ex in EXAMPLES:
+    mode = st.session_state.rag_mode
+    for ex in EXAMPLES.get(mode, EXAMPLES["oer"]):
         st.button(
             ex,
             key=f"ex_{ex[:12]}",
