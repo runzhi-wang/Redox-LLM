@@ -81,13 +81,24 @@ FEATURE_ICONS = {
 }
 
 
-def stats_badges_html(*, papers: int | str, chunks: int, model: str) -> str:
-    papers_txt = f"{int(papers):,}" if papers else "—"
-    chunks_txt = f"{int(chunks):,}" if chunks else "—"
+def _fmt_count(value: int | str) -> str:
+    return f"{int(value):,}" if value else "—"
+
+
+def stats_badges_html(
+    *,
+    oer_papers: int | str,
+    oer_chunks: int | str,
+    eo_papers: int | str,
+    eo_chunks: int | str,
+    model: str,
+) -> str:
     return (
         '<div class="stats-badges">'
-        f'<span class="stat-badge"><i class="dot"></i>{papers_txt} 篇文献</span>'
-        f'<span class="stat-badge"><i class="dot blue"></i>{chunks_txt} 知识片段</span>'
+        f'<span class="stat-badge"><i class="dot"></i>OER {_fmt_count(oer_papers)} 篇 · '
+        f"{_fmt_count(oer_chunks)} 片段</span>"
+        f'<span class="stat-badge"><i class="dot blue"></i>EO {_fmt_count(eo_papers)} 篇 · '
+        f"{_fmt_count(eo_chunks)} 片段</span>"
         f'<span class="stat-badge"><i class="dot violet"></i>{model}</span>'
         "</div>"
     )
@@ -110,9 +121,13 @@ def feature_cards_html() -> str:
     return "".join(parts)
 
 
-def hero_html(*, papers: int | str, chunks: int) -> str:
-    papers_txt = f"{int(papers):,}" if papers else "—"
-    chunks_txt = f"{int(chunks):,}" if chunks else "—"
+def hero_html(
+    *,
+    oer_papers: int | str,
+    oer_chunks: int | str,
+    eo_papers: int | str,
+    eo_chunks: int | str,
+) -> str:
     if has_full_logo():
         logo_block = (
             f'<img class="hero-logo-full" src="{brand_logo_full_src()}" alt="电化学大模型"/>'
@@ -127,9 +142,11 @@ def hero_html(*, papers: int | str, chunks: int) -> str:
         '<div class="hero-copy">'
         '<span class="hero-tag">科研文献助手</span>'
         f"{headline}"
-        f"<p>已索引 <strong>{papers_txt}</strong> 篇文献、"
-        f"<strong>{chunks_txt}</strong> 条知识片段，"
-        "为 OER / HER / 电芬顿等方向提供有据可查的智能解答</p>"
+        f"<p>OER 库 <strong>{_fmt_count(oer_papers)}</strong> 篇 / "
+        f"<strong>{_fmt_count(oer_chunks)}</strong> 片段 · "
+        f"EO 库 <strong>{_fmt_count(eo_papers)}</strong> 篇 / "
+        f"<strong>{_fmt_count(eo_chunks)}</strong> 片段</p>"
+        "<p>支持 OER、EO 与混合检索，为电催化与电氧化研究提供有据可查的智能解答</p>"
         "</div></div>"
     )
 

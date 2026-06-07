@@ -12,9 +12,9 @@ import streamlit as st
 
 from ask import query_rag
 from chat_log import append_record, export_xlsx, list_records, update_feedback
-from chroma_utils import ensure_collection_readable, vector_index_healthy
+from chroma_utils import create_chroma_client, vector_index_healthy
+from chromadb.errors import NotFoundError
 from config import (
-    ADMIN_KEY,
     CHAT_LOG_EXPORT_PATH,
     CHAT_MODEL,
     CHAT_MODEL_OPTIONS,
@@ -23,6 +23,7 @@ from config import (
     TOP_K,
     get_client,
 )
+from corpora import CORPORA, RAG_MODE_LABELS, count_indexed_papers, mode_ready
 from citations import chunk_preview, section_label
 from ui_branding import (
     LOGO_FULL_FILE,
@@ -37,11 +38,24 @@ from ui_branding import (
     stats_badges_html,
 )
 
-EXAMPLES = [
-    "中性 pH 下如何同时提升 OER 稳定性并降低过电位？",
-    "NiFe 催化剂在中性介质中的活性与机理？",
-    "哪些设计思路可迁移到电芬顿电极？",
-]
+EXAMPLES = {
+    "oer": [
+        "中性 pH 下如何同时提升 OER 稳定性并降低过电位？",
+        "NiFe 催化剂在中性介质中的活性与机理？",
+        "哪些设计思路可迁移到电芬顿电极？",
+    ],
+    "eo": [
+        "电氧化降解有机污染物时活性氯物种起什么作用？",
+        "BDD 电极在 EO 处理中的优势与局限？",
+        "哪些因素决定 EO 体系的电流效率？",
+    ],
+    "mixed": [
+        "OER 催化剂设计思路能否用于 EO 阳极？",
+        "电芬顿与阳极氧化联用的文献进展？",
+        "中性介质下如何选择 OER 或 EO 相关策略？",
+    ],
+}
+RAG_MODE_OPTIONS = list(RAG_MODE_LABELS.keys())
 
 MAX_HISTORY_TURNS = 8
 
@@ -567,44 +581,48 @@ def _read_index_report() -> Optional[dict]:
         return None
 
 
-def _count_indexed_papers() -> int:
-    """Count indexed literature from live progress / vector DB (not stale report)."""
-    progress_path = Path(__file__).resolve().parent / "output" / "index_progress.json"
-    if progress_path.exists():
-        try:
-            data = json.loads(progress_path.read_text(encoding="utf-8"))
-            files = data.get("files") or {}
-            done = sum(1 for item in files.values() if item.get("status") == "done")
-            if done:
-                return done
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    report = _read_index_report()
-    if report:
-        return int(report.get("files_done") or report.get("files_total") or 0)
-    return 0
+def _corpus_stats(client, key: str) -> dict:
+    corpus = CORPORA[key]
+    papers = count_indexed_papers(corpus)
+    chunks = 0
+    ok = False
+    try:
+        col = client.get_collection(corpus.collection_name)
+        chunks = int(col.count())
+        ok = chunks > 0 and vector_index_healthy(col)
+    except NotFoundError:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+    if not papers:
+        report = _read_index_report()
+        if report and key == "oer":
+            papers = int(report.get("files_done") or report.get("files_total") or 0)
+    return {"papers": papers, "chunks": chunks, "ok": ok}
 
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _index_status() -> dict:
-    papers = _count_indexed_papers()
-
+    empty = {k: {"papers": count_indexed_papers(CORPORA[k]), "chunks": 0, "ok": False} for k in CORPORA}
     if not CHROMA_DIR.exists() or not any(CHROMA_DIR.iterdir()):
-        return {"ok": False, "papers": papers, "chunks": 0}
+        return {**empty, "ok": False, "papers": 0, "chunks": 0}
     try:
-        client, col = ensure_collection_readable()
+        client = create_chroma_client()
         try:
-            ok = vector_index_healthy(col)
-            return {
-                "ok": ok,
-                "papers": papers,
-                "chunks": int(col.count()),
-            }
+            stats = {key: _corpus_stats(client, key) for key in CORPORA}
         finally:
             client.close()
     except Exception:  # noqa: BLE001
-        return {"ok": False, "papers": papers, "chunks": 0}
+        stats = empty
+    oer = stats.get("oer", empty["oer"])
+    eo = stats.get("eo", empty["eo"])
+    return {
+        "oer": oer,
+        "eo": eo,
+        "papers": int(oer.get("papers", 0)) + int(eo.get("papers", 0)),
+        "chunks": int(oer.get("chunks", 0)) + int(eo.get("chunks", 0)),
+        "ok": bool(oer.get("ok") or eo.get("ok")),
+    }
 
 
 def _fmt_time(iso: str) -> str:
@@ -751,19 +769,15 @@ def _render_message(msg: dict, idx: int) -> None:
 
 
 def _status_line(status: dict) -> str:
-    papers = int(status.get("papers") or 0)
-    chunks = int(status.get("chunks") or 0)
-    if status["ok"]:
-        return (
-            f'<span class="status-ok">● 可检索 {papers:,} 篇文献 · '
-            f"{chunks:,} 条片段</span>"
-        )
-    if papers or chunks:
-        return (
-            f'<span class="status-bad">● 知识库未就绪（已记录 {papers:,} 篇 / '
-            f"{chunks:,} 片段）</span>"
-        )
-    return '<span class="status-bad">● 知识库未就绪</span>'
+    oer = status.get("oer") or {}
+    eo = status.get("eo") or {}
+    op, oc = int(oer.get("papers") or 0), int(oer.get("chunks") or 0)
+    ep, ec = int(eo.get("papers") or 0), int(eo.get("chunks") or 0)
+    cls = "status-ok" if status.get("ok") else "status-bad"
+    return (
+        f'<span class="{cls}">● OER {op:,} 篇 / {oc:,} 片段 · '
+        f"EO {ep:,} 篇 / {ec:,} 片段</span>"
+    )
 
 
 def _render_site_brand(status: dict) -> None:
@@ -795,7 +809,20 @@ def _render_footer(status: dict) -> None:
 
 def _render_header(status: dict) -> None:
     _render_site_brand(status)
-    c1, c2, c3, c4 = st.columns([1.15, 0.72, 0.72, 0.55], gap="small")
+    c0, c1, c2, c3, c4 = st.columns([0.95, 1.0, 0.72, 0.72, 0.55], gap="small")
+    with c0:
+        rag_idx = (
+            RAG_MODE_OPTIONS.index(st.session_state.rag_mode)
+            if st.session_state.rag_mode in RAG_MODE_OPTIONS
+            else 0
+        )
+        st.session_state.rag_mode = st.selectbox(
+            "知识库",
+            RAG_MODE_OPTIONS,
+            format_func=lambda m: RAG_MODE_LABELS.get(m, m),
+            index=rag_idx,
+            label_visibility="collapsed",
+        )
     with c1:
         idx = (
             CHAT_MODEL_OPTIONS.index(st.session_state.chat_model)
@@ -831,19 +858,20 @@ def _render_header(status: dict) -> None:
                 st.session_state.top_k,
                 help="越大回答越全面，但可能更慢",
             )
-            if st.session_state.is_admin:
-                st.success("管理员")
-                if st.button("导出 Excel"):
-                    n = export_xlsx(CHAT_LOG_EXPORT_PATH)
-                    st.caption(f"已导出 {n} 条")
-                    with CHAT_LOG_EXPORT_PATH.open("rb") as f:
-                        st.download_button("下载", f.read(), CHAT_LOG_EXPORT_PATH.name)
-                if st.button("退出管理"):
-                    st.session_state.is_admin = False
-            else:
-                key = st.text_input("管理员密钥", type="password")
-                if st.button("登录") and ADMIN_KEY and key == ADMIN_KEY:
-                    st.session_state.is_admin = True
+            st.caption(
+                f"当前：{RAG_MODE_LABELS.get(st.session_state.rag_mode, '')} 知识库"
+            )
+            st.divider()
+            if st.button("导出提问记录 Excel", use_container_width=True):
+                n = export_xlsx(CHAT_LOG_EXPORT_PATH)
+                st.caption(f"已导出 {n} 条")
+                with CHAT_LOG_EXPORT_PATH.open("rb") as f:
+                    st.download_button(
+                        "下载 Excel",
+                        f.read(),
+                        CHAT_LOG_EXPORT_PATH.name,
+                        use_container_width=True,
+                    )
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('<div class="toolbar-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
 
@@ -928,9 +956,11 @@ def _answer(text: str, top_k: int) -> None:
     status = _index_status()
     answer, refs, chunks = "", [], []
     model = st.session_state.chat_model
+    rag_mode = st.session_state.rag_mode
 
-    if not status["ok"]:
-        answer = "知识库暂不可用，请联系管理员重建索引。"
+    if not mode_ready(rag_mode, status):
+        label = RAG_MODE_LABELS.get(rag_mode, rag_mode)
+        answer = f"当前 {label} 知识库暂不可用，请联系管理员完成索引构建。"
     else:
         try:
             get_client()
@@ -940,6 +970,7 @@ def _answer(text: str, top_k: int) -> None:
                 top_k=top_k,
                 model=st.session_state.chat_model,
                 history=prior,
+                rag_mode=rag_mode,
             )
             answer = result["answer"]
             refs = result["refs"]
@@ -984,10 +1015,10 @@ _inject_css()
 for key, val in [
     ("messages", []),
     ("chat_model", CHAT_MODEL),
+    ("rag_mode", "oer"),
     ("top_k", TOP_K),
     ("page", "chat"),
     ("processing_query", None),
-    ("is_admin", False),
 ]:
     st.session_state.setdefault(key, val)
 

@@ -52,21 +52,23 @@ def _patch_collection_metadata(collection) -> None:
 def open_collection(
     chroma: chromadb.PersistentClient,
     *,
+    name: str | None = None,
     create_if_missing: bool = True,
 ):
+    collection_name = name or COLLECTION_NAME
     try:
-        collection = chroma.get_collection(COLLECTION_NAME)
+        collection = chroma.get_collection(collection_name)
     except NotFoundError:
         if not create_if_missing:
             raise
         collection = chroma.create_collection(
-            name=COLLECTION_NAME,
+            name=collection_name,
             metadata=HNSW_CREATE_METADATA,
         )
         return collection
 
     _patch_collection_metadata(collection)
-    return chroma.get_collection(COLLECTION_NAME)
+    return chroma.get_collection(collection_name)
 
 
 def _embedding_nonempty(vec: Any) -> bool:
@@ -155,14 +157,15 @@ def repair_hnsw_segments() -> bool:
 def ensure_collection_readable(
     chroma: Optional[chromadb.PersistentClient] = None,
     collection=None,
+    *,
+    name: str | None = None,
 ):
     """
     Ensure collection.get() works. Rebuilds broken HNSW segments when needed.
     Returns (client, collection).
     """
-    own_client = chroma is None
     client = chroma or create_chroma_client()
-    col = collection or open_collection(client)
+    col = collection or open_collection(client, name=name)
 
     if probe_collection(col):
         return client, col
